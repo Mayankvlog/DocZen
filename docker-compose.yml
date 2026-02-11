@@ -1,0 +1,142 @@
+version: '3.8'
+
+services:
+  # MongoDB Atlas (local development)
+  mongodb:
+    image: mongo:7.0
+    container_name: doczen-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: doczen
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./infrastructure/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - doczen-network
+
+  # Redis
+  redis:
+    image: redis:7.2-alpine
+    container_name: doczen-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - doczen-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: doczen-backend
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=development
+      - MONGODB_URL=mongodb://admin:password123@mongodb:27017/doczen?authSource=admin
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=your-super-secret-key-change-in-production
+      - ALLOWED_HOSTS=http://localhost:3000,http://localhost:8080
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - uploads_data:/app/uploads
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - doczen-network
+
+  # Flask Workers
+  workers:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: doczen-workers
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=development
+      - REDIS_URL=redis://redis:6379
+      - UPLOAD_DIR=/app/uploads
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./workers:/app
+      - uploads_data:/app/uploads
+    depends_on:
+      - redis
+    networks:
+      - doczen-network
+
+  # Celery Worker
+  celery-worker:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: doczen-celery
+    restart: unless-stopped
+    command: celery -A main.celery worker --loglevel=info
+    environment:
+      - ENVIRONMENT=development
+      - REDIS_URL=redis://redis:6379
+      - UPLOAD_DIR=/app/uploads
+    volumes:
+      - ./workers:/app
+      - uploads_data:/app/uploads
+    depends_on:
+      - redis
+    networks:
+      - doczen-network
+
+  # Flutter Web Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.web
+    container_name: doczen-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - doczen-network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: doczen-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/ssl:/etc/nginx/ssl:ro
+      - uploads_data:/var/www/uploads:ro
+    depends_on:
+      - frontend
+      - backend
+      - workers
+    networks:
+      - doczen-network
+
+volumes:
+  mongodb_data:
+    driver: local
+  redis_data:
+    driver: local
+  uploads_data:
+    driver: local
+
+networks:
+  doczen-network:
+    driver: bridge

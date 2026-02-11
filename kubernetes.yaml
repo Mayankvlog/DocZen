@@ -1,0 +1,479 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: doczen-backend
+  namespace: doczen
+  labels:
+    app: doczen-backend
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: doczen-backend
+  template:
+    metadata:
+      labels:
+        app: doczen-backend
+        version: v1
+    spec:
+      containers:
+      - name: backend
+        image: doczen/backend:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: MONGODB_URL
+          valueFrom:
+            secretKeyRef:
+              name: doczen-secrets
+              key: mongodb-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: doczen-secrets
+              key: redis-url
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: doczen-secrets
+              key: secret-key
+        - name: ALLOWED_HOSTS
+          value: "https://doczen.example.com"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: uploads
+          mountPath: /app/uploads
+      volumes:
+      - name: uploads
+        persistentVolumeClaim:
+          claimName: doczen-uploads-pvc
+      imagePullSecrets:
+      - name: doczen-registry-secret
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: doczen-backend-service
+  namespace: doczen
+  labels:
+    app: doczen-backend
+spec:
+  selector:
+    app: doczen-backend
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: doczen-workers
+  namespace: doczen
+  labels:
+    app: doczen-workers
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: doczen-workers
+  template:
+    metadata:
+      labels:
+        app: doczen-workers
+        version: v1
+    spec:
+      containers:
+      - name: workers
+        image: doczen/workers:latest
+        ports:
+        - containerPort: 5000
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: doczen-secrets
+              key: redis-url
+        - name: UPLOAD_DIR
+          value: "/app/uploads"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: uploads
+          mountPath: /app/uploads
+      volumes:
+      - name: uploads
+        persistentVolumeClaim:
+          claimName: doczen-uploads-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: doczen-workers-service
+  namespace: doczen
+  labels:
+    app: doczen-workers
+spec:
+  selector:
+    app: doczen-workers
+  ports:
+  - name: http
+    port: 5000
+    targetPort: 5000
+    protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: doczen-celery
+  namespace: doczen
+  labels:
+    app: doczen-celery
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: doczen-celery
+  template:
+    metadata:
+      labels:
+        app: doczen-celery
+        version: v1
+    spec:
+      containers:
+      - name: celery
+        image: doczen/workers:latest
+        command: ["celery", "-A", "main.celery", "worker", "--loglevel=info"]
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: doczen-secrets
+              key: redis-url
+        - name: UPLOAD_DIR
+          value: "/app/uploads"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: uploads
+          mountPath: /app/uploads
+      volumes:
+      - name: uploads
+        persistentVolumeClaim:
+          claimName: doczen-uploads-pvc
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: doczen-frontend
+  namespace: doczen
+  labels:
+    app: doczen-frontend
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: doczen-frontend
+  template:
+    metadata:
+      labels:
+        app: doczen-frontend
+        version: v1
+    spec:
+      containers:
+      - name: frontend
+        image: doczen/frontend:latest
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: doczen-frontend-service
+  namespace: doczen
+  labels:
+    app: doczen-frontend
+spec:
+  selector:
+    app: doczen-frontend
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+    protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: doczen-nginx
+  namespace: doczen
+  labels:
+    app: doczen-nginx
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: doczen-nginx
+  template:
+    metadata:
+      labels:
+        app: doczen-nginx
+        version: v1
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 80
+        - containerPort: 443
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        - name: ssl-certs
+          mountPath: /etc/nginx/ssl
+          readOnly: true
+        - name: uploads
+          mountPath: /var/www/uploads
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: doczen-nginx-config
+      - name: ssl-certs
+        secret:
+          secretName: doczen-ssl-certs
+      - name: uploads
+        persistentVolumeClaim:
+          claimName: doczen-uploads-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: doczen-nginx-service
+  namespace: doczen
+  labels:
+    app: doczen-nginx
+spec:
+  selector:
+    app: doczen-nginx
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+  - name: https
+    port: 443
+    targetPort: 443
+  type: LoadBalancer
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: doczen-ingress
+  namespace: doczen
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+spec:
+  tls:
+  - hosts:
+    - doczen.example.com
+    secretName: doczen-tls
+  rules:
+  - host: doczen.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: doczen-nginx-service
+            port:
+              number: 80
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: doczen-backend-hpa
+  namespace: doczen
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: doczen-backend
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: doczen-workers-hpa
+  namespace: doczen
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: doczen-workers
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: doczen-celery-hpa
+  namespace: doczen
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: doczen-celery
+  minReplicas: 3
+  maxReplicas: 15
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
